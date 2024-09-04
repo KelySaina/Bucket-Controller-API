@@ -1,4 +1,4 @@
-require('dotenv').config(); 
+require('dotenv').config();
 const cors = require('cors');
 const multer = require('multer');
 const express = require('express');
@@ -10,31 +10,32 @@ const {
   deleteBucket,
   getBucketSize,
   uploadFile,
+  uploadMultipleFiles,
   deleteFile,
   deleteAllFilesInBucket,
-  getFileNumberInBucket
+  getFileNumberInBucket,
+  deleteAllBuckets
 } = require('./bucket.controller');
 
 const app = express();
-app.use(cors())
+app.use(cors());
 app.use(express.json());
 
-// Configure storage
+// Configure storage for single and multiple files
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-      cb(null, './uploads_temp'); // Ensure this directory exists
-    },
-    filename: (req, file, cb) => {
-      // Replace spaces with dashes in the filename
-      const sanitizedFileName = file.originalname.replace(/\s+/g, '-');
-      cb(null, `${Date.now()}_${sanitizedFileName}`);
-    },
-  });
-  
-  // Create multer instance
-  const upload = multer({ storage });
+  destination: (req, file, cb) => {
+    cb(null, './uploads_temp'); // Ensure this directory exists
+  },
+  filename: (req, file, cb) => {
+    // Replace spaces with dashes in the filename
+    const sanitizedFileName = file.originalname.replace(/\s+/g, '-');
+    cb(null, `${Date.now()}_${sanitizedFileName}`);
+  },
+});
 
-// Route to create a new bucket
+const upload = multer({ storage });
+
+// Bucket Operations
 app.post('/bucket', async (req, res) => {
   const { bucketName } = req.body;
   try {
@@ -45,7 +46,6 @@ app.post('/bucket', async (req, res) => {
   }
 });
 
-// Route to update a bucket
 app.put('/bucket/:bucketName', async (req, res) => {
   const { bucketName } = req.params;
   const newSettings = req.body;
@@ -57,7 +57,6 @@ app.put('/bucket/:bucketName', async (req, res) => {
   }
 });
 
-// Route to delete a bucket
 app.delete('/bucket/:bucketName', async (req, res) => {
   const { bucketName } = req.params;
   try {
@@ -68,7 +67,15 @@ app.delete('/bucket/:bucketName', async (req, res) => {
   }
 });
 
-// Route to get the size of a bucket
+app.delete('/buckets', async (req, res) => {
+  try {
+    const data = await deleteAllBuckets();
+    res.status(200).json({ message: 'All buckets deleted successfully', data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 app.get('/bucket/:bucketName/size', async (req, res) => {
   const { bucketName } = req.params;
   try {
@@ -79,67 +86,84 @@ app.get('/bucket/:bucketName/size', async (req, res) => {
   }
 });
 
-// Route to get the number of files of a bucket
 app.get('/bucket/:bucketName/file-number', async (req, res) => {
-    const { bucketName } = req.params;
-    try {
-      const nb_file = await getFileNumberInBucket(bucketName);
-      res.status(200).json({ message: 'Files in Bucket retrieved successfully', nb_file });
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
+  const { bucketName } = req.params;
+  try {
+    const nb_file = await getFileNumberInBucket(bucketName);
+    res.status(200).json({ message: 'Number of files in bucket retrieved successfully', nb_file });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
+// File Operations
+app.post('/bucket/:bucketName/upload', upload.single('file'), async (req, res) => {
+  const { bucketName } = req.params;
+  const file = req.file;
 
-// Route to delete a file from a bucket
+  if (!file) {
+    return res.status(400).json({ message: 'No file uploaded' });
+  }
+
+  try {
+    const filePath = path.join(__dirname, file.path);
+    const fileName = file.originalname;
+
+    const data = await uploadFile(bucketName, filePath, fileName);
+
+    fs.unlinkSync(filePath); // Delete the file from the temporary folder
+
+    res.status(200).json({ message: 'File uploaded successfully', data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/bucket/:bucketName/upload-multiple', upload.array('file', 10), async (req, res) => {
+  const { bucketName } = req.params;
+  const files = req.files;
+
+  if (!files || files.length === 0) {
+    return res.status(400).json({ message: 'No files uploaded' });
+  }
+
+  try {
+    const filePaths = files.map(file => ({
+      path: path.join(__dirname, file.path),
+      name: file.originalname
+    }));
+
+    const data = await uploadMultipleFiles(bucketName, filePaths);
+
+    files.forEach(file => fs.unlinkSync(path.join(__dirname, file.path))); // Delete the files from the temporary folder
+
+    res.status(200).json({ message: 'Files uploaded successfully', data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 app.delete('/bucket/:bucketName/delete/:fileName', async (req, res) => {
-    const { bucketName, fileName } = req.params;
-  
-    try {
-      const data = await deleteFile(bucketName, fileName);
-      res.status(200).json({ message: 'File deleted successfully', data });
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
+  const { bucketName, fileName } = req.params;
 
-  // Route to delete al file from a bucket
-    app.delete('/bucket/:bucketName/deleteAll', async (req, res) => {
-        const { bucketName, fileName } = req.params;
-    
-        try {
-        const data = await deleteAllFilesInBucket(bucketName);
-        res.status(200).json({ message: 'Files deleted successfully', data });
-        } catch (error) {
-        res.status(500).json({ message: error.message });
-        }
-    });
+  try {
+    const data = await deleteFile(bucketName, fileName);
+    res.status(200).json({ message: 'File deleted successfully', data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
-    // Route to upload a file to a bucket
-    app.post('/bucket/:bucketName/upload', upload.single('file'), async (req, res) => {
-        const { bucketName } = req.params;
-        const file = req.file;
-    
-        if (!file) {
-        return res.status(400).json({ message: 'No file uploaded' });
-        }
-    
-        try {
-        // Define the path to the file and its name
-        const filePath = path.join(__dirname, file.path);
-        const fileName = file.originalname;
-    
-        // Upload the file to Supabase bucket
-        const data = await uploadFile(bucketName, filePath, fileName);
-    
-        // Delete the file from the temporary folder
-        fs.unlinkSync(filePath);
-    
-        res.status(200).json({ message: 'File uploaded successfully', data });
-        } catch (error) {
-        res.status(500).json({ message: error.message });
-        }
-    });  
+app.delete('/bucket/:bucketName/delete-all', async (req, res) => {
+  const { bucketName } = req.params;
+
+  try {
+    const data = await deleteAllFilesInBucket(bucketName);
+    res.status(200).json({ message: 'All files in bucket deleted successfully', data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
 // Start the server using the PORT from the .env file
 const PORT = process.env.PORT || 3000;
